@@ -1,8 +1,6 @@
 
 
-# =============================================
-# 🧱 Imports
-# =============================================
+
 import pandas as pd
 import operator
 from typing import Dict, Union, Any, Annotated, Sequence, TypedDict, Literal, Optional, List
@@ -14,16 +12,18 @@ from groq import APIError
 
 from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
-from langchain_experimental.agents import create_pandas_dataframe_agent
+
 from langchain.tools import StructuredTool
+from langgraph.store.memory import InMemoryStore
+from langmem import create_manage_memory_tool, create_search_memory_tool
 #from pydantic import BaseModel
 
 from langgraph.graph import StateGraph, START, END
-from langgraph.prebuilt.tool_node import ToolNode, tools_condition
+
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage
 from src.config import  api_key, OPENAI_API_KEY
-from langchain_core.prompts import SystemMessagePromptTemplate
+
 from langchain_core.messages import SystemMessage
 #from src.visuals import units_visual_tool_struct
 from langchain_core.tools import tool, InjectedToolCallId
@@ -52,7 +52,7 @@ units_df = pd.read_csv("data/units_cleaned.csv")
 class UserInfo(TypedDict, total=False):
     email: str
     name: str
-    preferredLocations: list[str]  # Changed from dict to list
+    preferredLocations: list[str]  
     averageBudget: int
     family_size: int
     is_investor: bool
@@ -65,8 +65,8 @@ class AgentState(TypedDict):
     saved_plots: Annotated[list, operator.add]
     next: str
     user: Optional[UserInfo]
-    plan: str  # 🆕 Track the execution plan
-    completed_steps: Annotated[list, operator.add]  # 🆕 Track completed steps
+    plan: str  
+    completed_steps: Annotated[list, operator.add]  
     current_goal: str 
 
 initial_state = {
@@ -74,8 +74,22 @@ initial_state = {
     "user": None,
     "plan": "",
     "completed_steps": [],
-    "current_goal": "" # ✅ initialize this once
+    "current_goal": "" #  initialize this once
 }
+
+# Initialize memory store
+memory_store = InMemoryStore(
+    index={
+        "dims": 1536,  # OpenAI embedding dimensions
+        "embed": "openai:text-embedding-3-small",
+    }
+)
+
+# Create memory tools
+
+
+manage_memeory=create_manage_memory_tool(namespace=("real_estate_assistant", "{user_email}", "memories"))
+search_memory=create_search_memory_tool(namespace=("real_estate_assistant", "{user_email}", "memories"))
 
 
     
@@ -84,181 +98,13 @@ initial_state = {
 llm = ChatOpenAI(model_name="gpt-4o", temperature=0.3, api_key=OPENAI_API_KEY, max_retries=2)
 #llm = ChatGroq(model_name="llama-3.1-8b-instant",temperature=0,api_key=api_key)
 #llm = ChatGroq(model_name="llama-3.3-70b-versatile",temperature=0,api_key=api_key)
-# 🆕 VERIFY
+#  VERIFY
 print("=" * 50)
-print(f"🎯 CONFIRMED ACTIVE MODEL: {llm.model_name}")
+print(f" CONFIRMED ACTIVE MODEL: {llm.model_name}")
 print("=" * 50)
 tools = [execute_python_query,find_properties_tool, google_maps_link_tool, nearby_places_tool,get_project_details,semantic_project_search,intelligent_project_matcher,
-         compare_projects_tool,search_egyptian_real_estate_tavily,search_market_intelligence,analyze_egyptian_neighborhood_advanced,get_project_availability]
+         compare_projects_tool,search_egyptian_real_estate_tavily,search_market_intelligence,analyze_egyptian_neighborhood_advanced,get_project_availability,manage_memeory,search_memory] 
 llm_with_tools = llm.bind_tools(tools)
-
-
-# def user_profiling_node(state: AgentState) -> dict:
-#     """
-#     Continuously learns about the user including frequent places and proximity needs
-#     """
-#     messages = state.get("messages", [])
-#     user_info = state.get("user", {}) or {}
-    
-#     user_email = user_info.get("email")
-    
-#     if not user_email:
-#         print("⚠️ No email in state - skipping profile persistence")
-#         return {}
-    
-#     # Get last human message
-#     last_human_msg = None
-#     for msg in reversed(messages):
-#         if isinstance(msg, HumanMessage):
-#             last_human_msg = msg.content
-#             break
-    
-#     if not last_human_msg:
-#         return {}
-    
-#     # Enhanced profile extraction prompt
-#     profiling_prompt = f"""Analyze this conversation and extract ANY new information about the user.
-
-# CONVERSATION: "{last_human_msg}"
-
-# CURRENT PROFILE:
-# {json.dumps(user_info, indent=2)}
-
-# Extract and update ALL relevant information:
-
-# 1. **Personal preferences** (location preferences, lifestyle, priorities)
-# 2. **Budget hints** (even approximate mentions like "around 5 million", "under 10M")
-# 3. **Family details** (size, children, pets mentioned)
-# 4. **Investment vs. residence** intent
-# 5. **Timeline urgency** (urgent, flexible, specific date)
-# 6. **Property requirements** (parking, floors, amenities, balcony, view)
-# 7. **Dislikes or deal-breakers** (noisy, ground floor, far from metro)
-
-# 🆕 8. **FREQUENT PLACES** - Extract ANY place the user mentions going to regularly:
-#    - Work location (office, business, workplace)
-#    - School (for kids)
-#    - University (for self or children)
-#    - Family locations (parents' house, relatives)
-#    - Hobby places (gym, club, mall, sports venue)
-#    - Religious places (mosque, church)
-#    - Any other regularly visited location
-   
-#    For each place extract:
-#    - type: "work", "school", "university", "family", "hobby", "gym", "hospital", "religious", "shopping", "other"
-#    - name: Name of the place/institution (MUST provide if mentioned, use "Unknown [type]" if name not given)
-#    - address: Location/area mentioned (MUST provide)
-#    - importance: "critical" (must be near), "high" (very important), "medium" (nice to have), "low" (optional)
-
-
-
-# Return ONLY a JSON object with NEW/UPDATED fields (empty {{}} if nothing new):
-# {{
-#   "preferredLocations": ["New Cairo", "Sheikh Zayed"],
-#   "averageBudget": 5000000,
-#   "family_size": 4,
-#   "is_investor": false,
-#   "preferences": {{"parking": true, "floor": "not ground", "quiet": true}},
-#   "timeline": "urgent",
-#   "dislikes": ["noisy areas", "ground floor"],
-#   "frequent_places": [
-#     {{"type": "work", "name": "Smart Village", "address": "6th October", "importance": "high"}},
-#     {{"type": "school", "name": "AIS", "address": "New Cairo", "importance": "critical"}},
-#     {{"type": "family", "name": "Parents house", "address": "Maadi", "importance": "medium"}}
-#   ],
-# }}
-
-# ⚠️ IMPORTANT: For frequent_places, ALWAYS include both "name" and "address" fields. If name not mentioned, use "Unknown School", "Unknown Workplace", etc.
-
-# CRITICAL: Only include fields that were mentioned or implied in the conversation!"""
-    
-#     try:
-#         response = llm.invoke([
-#             SystemMessage(content="You are a user profiling expert. Extract information precisely, especially location-based needs."),
-#             HumanMessage(content=profiling_prompt)
-#         ])
-        
-#         # Parse response
-#         content = response.content.strip()
-#         if content.startswith("```"):
-#             content = content.split("```")[1]
-#             if content.startswith("json"):
-#                 content = content[4:]
-        
-#         updates = json.loads(content)
-        
-#         if updates:
-#             # Merge with existing user info
-#             for key, value in updates.items():
-#                 if key == "preferredLocations" and key in user_info:
-#                     existing = set(user_info.get(key, []))
-#                     new_locations = value if isinstance(value, list) else [value]
-#                     existing.update(new_locations)
-#                     user_info[key] = list(existing)
-                    
-#                 elif key == "frequent_places":
-#                     # 🆕 Merge frequent places (avoid duplicates by name+address)
-#                     existing_places = user_info.get(key, [])
-#                     existing_keys = {(p.get('name', ''), p.get('address', '')) for p in existing_places}
-                    
-#                     for new_place in value:
-#                         # ✅ VALIDATE: Ensure name and address exist
-#                         if not new_place.get('name'):
-#                             new_place['name'] = f"Unknown {new_place.get('type', 'Place').capitalize()}"
-#                         if not new_place.get('address'):
-#                             print(f"⚠️ Skipping place without address: {new_place}")
-#                             continue
-                        
-#                         place_key = (new_place.get('name'), new_place.get('address'))
-#                         if place_key not in existing_keys:
-#                             existing_places.append(new_place)
-#                             existing_keys.add(place_key)
-#                         else:
-#                             # Update importance if new one is higher
-#                             importance_order = {"critical": 4, "high": 3, "medium": 2, "low": 1}
-#                             for i, existing_place in enumerate(existing_places):
-#                                 if (existing_place.get('name'), existing_place.get('address')) == place_key:
-#                                     if importance_order.get(new_place.get('importance', 'low'), 0) > \
-#                                        importance_order.get(existing_place.get('importance', 'low'), 0):
-#                                         existing_places[i]['importance'] = new_place['importance']
-                    
-#                     user_info[key] = existing_places
-                    
-                
-                    
-#                 elif key == "preferences" and key in user_info:
-#                     if not isinstance(user_info[key], dict):
-#                         user_info[key] = {}
-#                     user_info[key].update(value)
-                    
-#                 elif key == "dislikes" and key in user_info:
-#                     existing = set(user_info.get(key, []))
-#                     new_dislikes = value if isinstance(value, list) else [value]
-#                     existing.update(new_dislikes)
-#                     user_info[key] = list(existing)
-#                 else:
-#                     user_info[key] = value
-            
-#             print(f"👤 USER PROFILE UPDATED: {updates}")
-            
-#             # ✅ FIX: Call the method correctly with self (it's already a method call)
-#             try:
-#                 save_user_profile_by_email(user_email, user_info)
-#                 print(f"💾 Profile saved to database for {user_email}")
-#             except Exception as db_error:
-#                 print(f"❌ Database save failed: {db_error}")
-#                 # Continue anyway - state is updated even if DB save fails
-    
-#     except json.JSONDecodeError as e:
-#         print(f"⚠️ Failed to parse profile update: {e}")
-#         print(f"Raw content: {response.content if 'response' in locals() else 'N/A'}")
-#     except Exception as e:
-#         print(f"⚠️ Profile extraction failed: {e}")
-#         import traceback
-#         traceback.print_exc()
-    
-#     return {"user": user_info}
-
-
 
 
 
@@ -282,69 +128,78 @@ def planning_node(state: AgentState) -> dict:
         return {"messages": []}
     
     user_info = state.get("user", {})
+    user_email = user_info.get("email")
 
-    # frequent_places_str = ""
-    # if user_info.get("frequent_places"):
-    #     frequent_places_str = "\n📍 FREQUENT PLACES:"
-    #     for place in user_info.get("frequent_places", []):
-    #         frequent_places_str += f"\n  - {place.get('type').upper()}: {place.get('name')} in {place.get('address')} (importance: {place.get('importance')})"
     
     # Create a planning prompt
+
+    memory_instructions = f"""
+ **MEMORY TOOLS**:
+- ALWAYS pass user_email: "{user_email}" when calling memory tools
+- Use search_memory to find user preferences  
+- Use manage_memory to save user preferences
+
+**Examples**:
+- User says "I prefer quiet areas" → manage_memory (user_email="{user_email}", action="save", content="User prefers quiet neighborhoods")
+- Before property search → search_memory(user_email="{user_email}", query="user preferences quiet budget location")
+"""
     planning_prompt = f"""Analyze this real estate query and create a simple plan.
 
+    
+
 USER: "{last_human_msg}"
-📊 USER CONTEXT:
+ USER CONTEXT:
 - Budget: {user_info.get('averageBudget', 'N/A')} EGP
 - Preferred Locations: {', '.join(user_info.get('preferredLocations', [])) or 'N/A'}
 - Family Size: {user_info.get('family_size', 'N/A')}
 
 ## SMART TOOL MATCHING:
 
-### 🏘️ USER ASKS ABOUT PROPERTIES TO BUY/RENT
+###  USER ASKS ABOUT PROPERTIES TO BUY/RENT
 Use ALL three (combo approach):
 1. **intelligent_project_matcher** - Find matching projects by budget/location
 2. **semantic_project_search** - If user mentions specific features ("quiet", "modern", "family-friendly")
 3. **search_egyptian_real_estate_tavily** - Get online listings with real sources
-✅ Return: Projects + online options + sources
+ Return: Projects + online options + sources
 
-### 🏙️ USER ASKS ABOUT AREA/NEIGHBORHOOD QUALITY
+###  USER ASKS ABOUT AREA/NEIGHBORHOOD QUALITY
 Use **analyze_egyptian_neighborhood_advanced** ONLY
-✅ When they ask: "Is it quiet?", "Good for families?", "Schools nearby?", "Tell me about [Area]"
+ When they ask: "Is it quiet?", "Good for families?", "Schools nearby?", "Tell me about [Area]"
 
-### 📊 USER ASKS ABOUT MARKET/TRENDS/INVESTMENT
+###  USER ASKS ABOUT MARKET/TRENDS/INVESTMENT
 Use **search_market_intelligence** 
 USE WHEN USER ASKS ABOUT*:
-  ✅ Market Trends: "What are current real estate trends in Egypt?"
-  ✅ Investment Advice: "Is it a good time to invest?", "Best ROI areas?"
-  ✅ Price Trends: "Are prices going up or down?", "Price appreciation rates?"
-  ✅ Laws/Regulations: "Can foreigners buy?", "What are ownership laws?", "Property taxes?"
-  ✅ Economic Factors: "How does inflation affect prices?", "Currency impact?"
-  ✅ Market Forecasts: "What's the outlook for 2026?", "Future predictions?"
-  ✅ Government Policies: "Mortgage programs?", "Government initiatives?"
-  ✅ Rental Market: "Typical rental yields?", "Tenant demand?"
-  ✅ Developer Activity: "Top developers?", "New project pipelines?"
-  ✅ Market Analysis: "Market size?", "Growth rate?", "Market health?"
-  ✅ Location Analysis: "Tell me about New Administrative Capital as investment"
-  ✅ General Advice: "Should I invest now or wait?", "Risks in Egyptian market?"
+   Market Trends: "What are current real estate trends in Egypt?"
+   Investment Advice: "Is it a good time to invest?", "Best ROI areas?"
+   Price Trends: "Are prices going up or down?", "Price appreciation rates?"
+   Laws/Regulations: "Can foreigners buy?", "What are ownership laws?", "Property taxes?"
+   Economic Factors: "How does inflation affect prices?", "Currency impact?"
+   Market Forecasts: "What's the outlook for 2026?", "Future predictions?"
+   Government Policies: "Mortgage programs?", "Government initiatives?"
+   Rental Market: "Typical rental yields?", "Tenant demand?"
+   Developer Activity: "Top developers?", "New project pipelines?"
+   Market Analysis: "Market size?", "Growth rate?", "Market health?"
+   Location Analysis: "Tell me about New Administrative Capital as investment"
+   General Advice: "Should I invest now or wait?", "Risks in Egyptian market?"
     *CRITICAL RULES*:
 - DO NOT use this for finding specific properties
 - Use for questions, analysis, advice, information
 - Great for "why", "how", "should I", "what about" questions
 
 
-### 🏢 USER ASKS ABOUT SPECIFIC PROJECT
+### USER ASKS ABOUT SPECIFIC PROJECT
 Use **get_project_details** for info
 Use **get_project_availability** to check units
-✅ When they ask: "Tell me about [Project Name]", "What units are available?"
+ When they ask: "Tell me about [Project Name]", "What units are available?"
 
-### 📍 USER WANTS PROXIMITY/NEARBY PLACES
+###  USER WANTS PROXIMITY/NEARBY PLACES
 Use **find_properties_tool** - Search near locations (work, school)
 Use **nearby_places_tool** - Show amenities near a property
-✅ When they ask: "Near my office?", "What's around [Project]?", "Schools nearby?"
+ When they ask: "Near my office?", "What's around [Project]?", "Schools nearby?"
 
-### 📈 USER NEEDS ANALYSIS/STATISTICS
+###  USER NEEDS ANALYSIS/STATISTICS
 Use **execute_python_query** with smart functions
-✅ When they ask: "Compare prices", "Budget breakdown", "Stats by area"
+ When they ask: "Compare prices", "Budget breakdown", "Stats by area"
 
 ---
 
@@ -375,7 +230,7 @@ Always mention sources when using search_market_intelligence"""
     
     # Add plan to state
     plan_content = f"""
-🎯 **EXECUTION PLAN**:
+ **EXECUTION PLAN**:
 {planning_msg.content}
 
 I'll now execute this plan step by step...
@@ -430,36 +285,42 @@ def reasoning_agent_node(state: AgentState) -> AgentState:
     #messages = clean_messages_for_token_limit(state["messages"], max_messages=4)
     user_info = state.get("user", {})
     plan = state.get("plan", "")
+    user_email = user_info['email']
 
-    # frequent_places_context = ""
-    # if user_info.get("frequent_places"):
-    #     frequent_places_context = "\n\n🗺️ **USER'S FREQUENT PLACES**:"
-    #     for place in user_info.get("frequent_places", []):
-    #         frequent_places_context += f"\n  - **{place.get('type').capitalize()}**: {place.get('name')} ({place.get('address')}) - {place.get('importance')} priority"
-        
-    #     frequent_places_context += "\n\n⚠️ **ALWAYS verify proximity to these places when recommending properties!**"
     
-    # Build reasoning context
-    # 🆕 PERSONAL CONTEXT (from your existing code)
     personal_context = f"""
-🎯 ACTIVE USER: **{user_info.get('name', 'User')}**
+ ACTIVE USER: **{user_info.get('name', 'User')}**
 
-📊 USER PROFILE:
-- Locations: {', '.join(user_info.get('preferredLocations', [])) or '❌ Not set'}
-- Budget: {user_info.get('averageBudget', '❌ Not set')} EGP
-- Family: {user_info.get('family_size', '❌ Unknown')} members
-- Type: {'🏗️ Investor' if user_info.get('is_investor') else '🏠 Residence'}
+ USER PROFILE:
+- Locations: {', '.join(user_info.get('preferredLocations', [])) or ' Not set'}
+- Budget: {user_info.get('averageBudget', ' Not set')} EGP
+- Family: {user_info.get('family_size', ' Unknown')} members
+- Type: {' Investor' if user_info.get('is_investor') else ' Residence'}
 
 
 
-⚠️ **When recommending properties, ALWAYS consider proximity to frequent places!**
+
+ **When recommending properties, ALWAYS consider proximity to frequent places!**
+"""
+
+    
+    memory_instructions = f"""
+ **MEMORY TOOLS**:
+- ALWAYS pass user_email: "{user_email}" when calling memory tools
+- Use search_memory to find user preferences  
+- Use manage_memory to save user preferences
+
+**Examples**:
+- User says "I prefer quiet areas" → manage_memory(user_email="{user_email}", action="create", content="User prefers quiet neighborhoods")
+- Before property search → search_memory(user_email="{user_email}", query="user preferences quiet budget location")
 """
     
-    # 🆕 UPDATED SYSTEM CONTEXT (replace the old reasoning_context)
-    
     system_context = f"""You are a smart real estate AI assistant. Think before you act.
+    
 
 {personal_context}
+
+
 
 PLAN: {plan}
 
@@ -480,8 +341,8 @@ Run the tools from your plan above with actual parameters.
 ---
 
 ## STEP 3: SYNTHESIZE & PERSONALIZE (Reason & Format)
-✅ DON'T: Just list tool outputs
-✅ DO: 
+ DON'T: Just list tool outputs
+ DO: 
 - Reference user's specific situation ("Based on your 2M budget and family of 4...")
 - Interpret results in their context ("This area is good for you because...")
 - Compare options if multiple ("Property A is closer to your work, Property B is quieter...")
@@ -492,22 +353,22 @@ Run the tools from your plan above with actual parameters.
 
 ## ANSWER STRUCTURE:
 
-1️⃣ **OPENING** (1-2 sentences)- do not explictly right opening this is just to show you structure
+1️ **OPENING** (1-2 sentences)- do not explictly right opening this is just to show you structure
    - Acknowledge their question
    - Reference their specific situation
 
-2️⃣ **FINDINGS** (Tool outputs formatted naturally)-do not explictly right findings this is just to show you structure
+2️ **FINDINGS** (Tool outputs formatted naturally)-do not explictly right findings this is just to show you structure
    - For properties: "Here are the best options for you..."
    - For areas: "This neighborhood is ideal because..."
    - Weave results into narrative, not bullet lists
    - Include links/sources but integrated, not raw
 
-3️⃣ **PERSONALIZED ANALYSIS** (2-3 sentences)
+3️ **PERSONALIZED ANALYSIS** (2-3 sentences)
    - What do these results mean FOR THEM?
    - How does it match their needs?
    - Any trade-offs to consider?
 
-4️⃣ **SUMMARY & SUGGESTIONS** (3-5 points)
+4️ **SUMMARY & SUGGESTIONS** (3-5 points)
    - Top 2-3 recommendations for them specifically
    - Next steps ("Would you like to know more about X?")
    - Questions to consider ("How important is school proximity?")
@@ -545,13 +406,13 @@ execute_python_query(code="get_market_summary()")
 ---
 
 ## CRITICAL RULES:
-1. ✅ Always reference user's personal context (budget, family, location preferences)
-2. ✅ Format as flowing narrative, not tool dumps
-3. ✅ Include links/sources but naturally integrated
-4. ✅ End with 2-3 personalized suggestions
-5. ✅ Be friendly, clear, and conversational, make the user feel like its taking to someone not a robot
-6. ✅ Flag risks or trade-offs relevant to them
-7. ✅ Ask follow-up questions to refine future searches
+1.  Always reference user's personal context (budget, family, location preferences)
+2.  Format as flowing narrative, not tool dumps
+3.  Include links/sources but naturally integrated
+4.  End with 2-3 personalized suggestions
+5.  Be friendly, clear, and conversational, make the user feel like its taking to someone not a robot
+6.  Flag risks or trade-offs relevant to them
+7.  Ask follow-up questions to refine future searches
 
 Execute the plan now using this reasoning approach."""
     
@@ -563,9 +424,9 @@ Execute the plan now using this reasoning approach."""
     # Log reasoning decision
     if response.tool_calls:
         tool_names = [tc.get('name') for tc in response.tool_calls]
-        print(f"🤔 REASONING: Calling tools {tool_names} to advance the plan")
+        print(f" REASONING: Calling tools {tool_names} to advance the plan")
     else:
-        print("🤔 REASONING: Providing final answer - plan complete")
+        print(" REASONING: Providing final answer - plan complete")
     
     return {"messages": [response], "next": "tools" if response.tool_calls else "end"}
 
@@ -596,9 +457,10 @@ def tool_node(state: AgentState) -> dict:
     tool_results = []
     state_updates = {}
 
+
     # Loop over tool_calls produced by the agent's AIMessage (if any)
     for tool_call in getattr(last_message, "tool_calls", []) or []:
-        # ✅ VALIDATE tool_call structure BEFORE processing
+        #  VALIDATE tool_call structure BEFORE processing
         if not isinstance(tool_call, dict):
             print(f"⚠️ Skipping non-dict tool_call: {tool_call}")
             continue
@@ -607,27 +469,27 @@ def tool_node(state: AgentState) -> dict:
         tool_args = tool_call.get("args", {})
         tool_call_id = tool_call.get("id")
 
-        # ✅ CRITICAL: Ensure args is always a valid dict
+        #  CRITICAL: Ensure args is always a valid dict
         if tool_args is None:
             tool_args = {}
         elif not isinstance(tool_args, dict):
-            print(f"⚠️ Converting non-dict args to dict for tool {tool_name}")
+            print(f" Converting non-dict args to dict for tool {tool_name}")
             tool_args = {}
 
         if not tool_name:
-            print(f"⚠️ Skipping tool_call without name: {tool_call}")
+            print(f" Skipping tool_call without name: {tool_call}")
             continue
             
         if not tool_call_id:
             tool_call_id = f"call_{uuid.uuid4().hex[:8]}"
 
-        print(f"🔧 Executing tool: {tool_name}")
-        print(f"📋 Tool arguments: {tool_args}")
+        print(f" Executing tool: {tool_name}")
+        print(f" Tool arguments: {tool_args}")
 
         result = None
         
         try:
-            # ✅ CREATE FULL TOOL CALL STRUCTURE for tools that need it
+            #  CREATE FULL TOOL CALL STRUCTURE for tools that need it
             full_tool_call = {
                 "name": tool_name,
                 "args": tool_args,
@@ -635,7 +497,7 @@ def tool_node(state: AgentState) -> dict:
                 "id": tool_call_id
             }
 
-            # ✅ FIXED: Use full tool call structure for tools that require InjectedToolCallId
+            #  FIXED: Use full tool call structure for tools that require InjectedToolCallId
             if tool_name == "execute_python_query":
                 result = execute_python_query.invoke(full_tool_call)
 
@@ -670,35 +532,44 @@ def tool_node(state: AgentState) -> dict:
                 result = intelligent_project_matcher.invoke(full_tool_call)
             elif tool_name == "get_project_availability":
                 result = get_project_availability.invoke(full_tool_call)
+
                 
             else:
                 result = f"Unknown tool: {tool_name}"
+                
+            
 
         except Exception as e:
             result = f"Error executing tool {tool_name}: {str(e)}"
-            print(f"❌ Tool error: {e}")
+            print(f" Tool error: {e}")
 
         # Handle result
         if isinstance(result, Command):
-            print("✅ Tool returned Command - extracting state updates")
+            print(" Tool returned Command - extracting state updates")
             if hasattr(result, 'update') and result.update:
                 for key, value in result.update.items():
                     if key == "messages":
                         tool_results.extend(value)
                     elif key == "saved_plots":
-                        # ✅ CRITICAL: Properly accumulate plots
+                        #  CRITICAL: Properly accumulate plots
                         if key not in state_updates:
                             state_updates[key] = []
                         state_updates[key].extend(value)
-                        print(f"✅ Added {len(value)} plot(s) to state updates")
+                        print(f" Added {len(value)} plot(s) to state updates")
                     else:
                         state_updates[key] = value
+
+        
+
+
         else:
             tool_message = ToolMessage(
                 content=str(result), 
                 tool_call_id=tool_call_id
             )
             tool_results.append(tool_message)
+
+   
 
     
 
@@ -724,20 +595,20 @@ async def setup_postgres_checkpointer(
     """
     os.add_dll_directory(r"C:\Program Files\PostgreSQL\16\bin")
     
-    # ✅ Use AsyncConnectionPool (not ConnectionPool)
+    #  Use AsyncConnectionPool (not ConnectionPool)
     pool = AsyncConnectionPool(
         conninfo=connection_string,
         max_size=20,
         kwargs={"autocommit": True, "prepare_threshold": 0}
     )
     
-    # ✅ Create ASYNC checkpointer
+    #  Create ASYNC checkpointer
     checkpointer = AsyncPostgresSaver(pool)
     
-    # ✅ Await setup
+    #  Await setup
     #await checkpointer.setup()
     
-    print("✅ PostgreSQL checkpointer initialized successfully")
+    print(" PostgreSQL checkpointer initialized successfully")
     
     return checkpointer
 
@@ -779,12 +650,12 @@ async def build_agent(llm,verbose: bool = True,use_postgres: bool = True):
     # workflow.add_edge("tools", "reasoning_agent")
 
 
-    # ✅ Use PostgreSQL checkpointer
+    #  Use PostgreSQL checkpointer
     # if use_postgres and connection_string:
-    #     print("✅ Using PostgreSQL checkpointer")
+    #     print(" Using PostgreSQL checkpointer")
     #     checkpointer =  await setup_postgres_checkpointer(connection_string)
-    #     # ✅ Add verification
-    #     print("🔍 Verifying database connection...")
+    #     #  Add verification
+    #     print(" Verifying database connection...")
     #     try:
     #         # Test connection
     #         import psycopg
@@ -792,17 +663,17 @@ async def build_agent(llm,verbose: bool = True,use_postgres: bool = True):
     #         cursor = conn.cursor()
     #         cursor.execute("SELECT COUNT(*) FROM checkpoints")
     #         count = cursor.fetchone()[0]
-    #         print(f"✅ Database accessible - {count} existing checkpoints")
+    #         print(f" Database accessible - {count} existing checkpoints")
     #         cursor.close()
     #         conn.close()
     #     except Exception as e:
-    #         print(f"❌ Database verification failed: {e}")
+    #         print(f" Database verification failed: {e}")
         
     # else:
-    #     print("⚠️ Using in-memory checkpointer (no persistence)")
+    #     print(" Using in-memory checkpointer (no persistence)")
     #     print(use_postgres, connection_string)
     checkpointer = MemorySaver()
-    return workflow.compile(checkpointer=checkpointer)
+    return workflow.compile(checkpointer=checkpointer,store=memory_store)
 
 
 
@@ -811,7 +682,7 @@ async def build_agent(llm,verbose: bool = True,use_postgres: bool = True):
 def verbose_wrapper(node_func, state, node_name):
     """Wrapper to add verbose logging to node execution"""
     print(f"\n{'─'*80}")
-    print(f"📍 NODE: {node_name.upper()}")
+    print(f" NODE: {node_name.upper()}")
     print(f"{'─'*80}")
     config = None
     if isinstance(state, tuple) and len(state) == 2:
@@ -820,12 +691,15 @@ def verbose_wrapper(node_func, state, node_name):
         config = state.config
     
     # Execute the actual node with config if available
+    # 🆕 EXECUTE WITH CONFIG IF AVAILABLE
     if config and node_func.__code__.co_argcount == 2:
+        # Node function expects (state, config)
         result = node_func(state, config)
     else:
+        # Node function expects only state
         result = node_func(state)
 
-    # ✅ Handle Command return type first
+    #  Handle Command return type first
     if isinstance(result, Command):
         print(f"🪄 Node '{node_name}' returned a Command object")
 
@@ -837,54 +711,54 @@ def verbose_wrapper(node_func, state, node_name):
             messages = []
 
         if messages:
-            print(f"📦 Command contains {len(messages)} messages")
+            print(f" Command contains {len(messages)} messages")
         else:
-            print("ℹ️ Command returned with no messages (state update only).")
+            print(" Command returned with no messages (state update only).")
 
         # Important: return Command to LangGraph unchanged
         return result
 
-    # ✅ Handle normal dictionary-based states
+    
     elif isinstance(result, dict):
         messages = result.get("messages", [])
     else:
-        print(f"⚠️ Unexpected return type from node '{node_name}': {type(result)}")
+        print(f" Unexpected return type from node '{node_name}': {type(result)}")
         return result
 
-    # Display what happened
+   
     if node_name == "agent":
         if messages:
             last_msg = messages[-1]
 
             if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
-                print("🤔 Agent Decision: CALL TOOL")
+                print(" Agent Decision: CALL TOOL")
                 for tool_call in last_msg.tool_calls:
                     tool_name = tool_call.get('name', 'unknown')
                     tool_args = tool_call.get('args', {})
                     
-                    print(f"\n🔧 Tool: {tool_name}")
+                    print(f"\n Tool: {tool_name}")
                     
                     # ✅ FIXED: Display arguments based on tool type
                     if tool_name == "execute_python_query":
-                        print(f"📋 Code to execute:")
+                        print(f" Code to execute:")
                         print("─" * 40)
                         print(tool_args.get("code", "N/A"))
                         print("─" * 40)
                     else:
                         # For other tools, display their arguments
-                        print(f"📋 Arguments:")
+                        print(f" Arguments:")
                         print("─" * 40)
                         for key, value in tool_args.items():
                             print(f"  {key}: {value}")
                         print("─" * 40)
             else:
-                print("🤔 Agent Decision: PROVIDE ANSWER")
+                print(" Agent Decision: PROVIDE ANSWER")
                 if hasattr(last_msg, "content") and last_msg.content:
                     print(f"\n💬 Response: {last_msg.content}")
 
     elif node_name == "tools":
         if messages:
-            print("⚙️  Tool Execution Results:")
+            print("  Tool Execution Results:")
             for msg in messages:
                 if isinstance(msg, ToolMessage):
                     print("─" * 40)

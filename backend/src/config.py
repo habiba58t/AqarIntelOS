@@ -5,7 +5,7 @@ load_dotenv()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 api_key=os.getenv("GROQ_API_KEY")
-langsmith_api_key = os.getenv("LANGSMITH_API_KEY")
+langsmith_api_key = os.getenv("LANGCHAIN_API_KEY")
 
 
 
